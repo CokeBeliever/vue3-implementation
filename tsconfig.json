@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "baseUrl": "./",
+    "resolveJsonModule": true,
+    "outDir": "temp",
+    "rootDir": "./",
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "paths": {
+      "@vue/*": [
+        "packages/*/src"
+      ],
+    }
+  },
+  "include": [
+    "packages/*/src",
+    "packages/*/__tests__",
+  ]
+}

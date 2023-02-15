@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "version": "1.0.0",
+  "packageManager": "pnpm@7.26.0",
+  "type": "module",
+  "scripts": {},
+  "devDependencies": {
+    "typescript": "^4.9.5"
+  }
+}
