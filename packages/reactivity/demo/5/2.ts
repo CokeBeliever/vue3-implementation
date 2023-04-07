@@ -40,7 +40,7 @@ enum TriggerType {
  */
 enum ReactiveFlags {
   /** 访问原始数据 */
-  raw = '__v_raw',
+  RAW = '__v_raw',
 }
 
 const bucket = new WeakMap<object, Map<string | symbol, Set<EffectFnInterface>>>()
@@ -55,8 +55,8 @@ const ITERATE_KEY = Symbol()
 function reactive<T extends object>(obj: T) {
   return new Proxy(obj, {
     get(target, key, receiver) {
-      // 代理对象可以通过 ReactiveFlags.raw 属性访问原始数据
-      if (key === ReactiveFlags.raw) {
+      // 代理对象可以通过 ReactiveFlags.RAW 属性访问原始数据
+      if (key === ReactiveFlags.RAW) {
         return target
       }
 
@@ -80,8 +80,8 @@ function reactive<T extends object>(obj: T) {
       const type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
       const res = Reflect.set(target, key, newVal, receiver)
 
-      // target === receiver[ReactiveFlags.raw] 说明 receiver 就是 target 的代理对象
-      if (target === receiver[ReactiveFlags.raw]) {
+      // target === receiver[ReactiveFlags.RAW] 说明 receiver 就是 target 的代理对象
+      if (target === receiver[ReactiveFlags.RAW]) {
         // 比较新值与旧值，只有当它们不全等，并且都不是 NaN 的时候才触发响应
         if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
           trigger(target, key, type)
@@ -130,8 +130,8 @@ function trigger<T extends object>(target: T, key: string | symbol, type: Trigge
   if (!depsMap) return
   const effects = depsMap.get(key)
   const iterateEffects = depsMap.get(ITERATE_KEY)
-
   const effectsToRun = new Set<EffectFnInterface>()
+
   effects &&
     effects.forEach((effectFn) => {
       if (effectFn !== activeEffect) {
@@ -192,7 +192,7 @@ function cleanup(effectFn: EffectFnInterface) {
 }
 
 // -------------------- 测试 --------------------
-// -------------------- 测试1 --------------------
+// -------------------- 测试 1 --------------------
 // let p = reactive({ foo: 1 })
 // effect(() => {
 //   console.log(p.foo)
@@ -201,7 +201,7 @@ function cleanup(effectFn: EffectFnInterface) {
 // // 设置 p.foo 的值，但值没有变化
 // p.foo = 1
 
-// -------------------- 测试2 --------------------
+// -------------------- 测试 2 --------------------
 const obj: { bar?: number } = {}
 const proto = { bar: 1 }
 const child = reactive(obj)

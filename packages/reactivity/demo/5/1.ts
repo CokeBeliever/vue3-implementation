@@ -1,4 +1,4 @@
-// -------------------- 读取 + 删除 --------------------
+// -------------------- 代理 Object --------------------
 
 // -------------------- 类型代码 --------------------
 /**
@@ -116,8 +116,8 @@ function trigger<T extends object>(target: T, key: string | symbol, type: Trigge
   const effects = depsMap.get(key)
   // 取得与 ITERATE_KEY 相关联的副作用函数
   const iterateEffects = depsMap.get(ITERATE_KEY)
-
   const effectsToRun = new Set<EffectFnInterface>()
+
   // 将与 key 相关联的副作用函数添加到 effectsToRun
   effects &&
     effects.forEach((effectFn) => {

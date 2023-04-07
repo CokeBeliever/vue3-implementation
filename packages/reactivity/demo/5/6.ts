@@ -1,4 +1,4 @@
-// -------------------- 浅响应和深响应 --------------------
+// -------------------- 代理数组 - 数组的索引与 length --------------------
 
 // -------------------- 类型代码 --------------------
 /**
@@ -47,30 +47,44 @@ const bucket = new WeakMap<object, Map<string | symbol, Set<EffectFnInterface>>>
 let activeEffect: EffectFnInterface | undefined
 const effectStack: EffectFnInterface[] = []
 const ITERATE_KEY = Symbol()
+const reactiveMap = new Map()
+
+/**
+ * key 是否为索引
+ * @param key 属性键
+ */
+const isIndex = (key: string | symbol): boolean => {
+  if (typeof key === 'symbol') return false
+  const index = Number(key)
+  return Number.isInteger(index) && index >= 0
+}
 
 /**
  * 封装创建响应式数据逻辑
  * @param obj 对象
- * @param isShallow 是否为浅响应
+ * @param isShallow 是否为浅响应/浅只读
+ * @param isReadonly 是否只读
  */
-function createReactive<T extends object>(obj: T, isShallow = false): T {
-  return new Proxy(obj, {
+function createReactive<T extends object>(obj: T, isShallow = false, isReadonly = false): T {
+  const existionProxy = reactiveMap.get(obj)
+  if (existionProxy) return existionProxy
+
+  const proxy = new Proxy(obj, {
     get(target, key, receiver) {
       if (key === ReactiveFlags.RAW) {
         return target
       }
 
-      track(target, key)
+      if (!isReadonly) {
+        track(target, key)
+      }
 
-      // 得到非响应式的结果
       const res = Reflect.get(target, key, receiver)
-      // 如果是浅响应，则直接返回结果
       if (isShallow) {
         return res
       } else {
         if (typeof res === 'object' && res !== null) {
-          // 调用 createReactive 将结果包装成响应式数据并返回
-          return createReactive(res)
+          return isReadonly && !isShallow ? createReactive(res, false, true) : createReactive(res)
         }
         return res
       }
@@ -87,13 +101,31 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
     },
 
     set(target, key, newVal, receiver) {
+      if (isReadonly) {
+        console.warn(`属性 ${key.toString()} 是只读的`)
+        return true
+      }
       const oldVal = target[key]
-      const type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
+      // 判断是在添加新的属性，还是设置已有属性
+      let type = TriggerType.SET
+
+      {
+        // 如果代理目标是数组并且 key 是索引时，则检测被设置的索引值是否小于数组长度判断
+        if (Array.isArray(target) && isIndex(key)) {
+          type = Number(key) < target.length ? TriggerType.SET : TriggerType.ADD
+        }
+        // 其他情况，则根据属性是否存在进行判断
+        else {
+          type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
+        }
+      }
+
       const res = Reflect.set(target, key, newVal, receiver)
 
       if (target === receiver[ReactiveFlags.RAW]) {
         if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
-          trigger(target, key, type)
+          // 增加第四个参数，即触发响应的新值
+          trigger(target, key, type, newVal)
         }
       }
 
@@ -101,6 +133,10 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
     },
 
     deleteProperty(target, key) {
+      if (isReadonly) {
+        console.warn(`属性 ${key.toString()} 是只读的`)
+        return true
+      }
       const hadKey = Object.prototype.hasOwnProperty.call(target, key)
       const res = Reflect.deleteProperty(target, key)
 
@@ -111,6 +147,10 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
       return res
     },
   })
+
+  reactiveMap.set(obj, proxy)
+
+  return proxy
 }
 
 /**
@@ -127,6 +167,22 @@ function reactive<T extends object>(obj: T) {
  */
 function shallowReactive<T extends object>(obj: T) {
   return createReactive(obj, true)
+}
+
+/**
+ * 创建深只读数据
+ * @param obj 对象
+ */
+function readonly<T extends object>(obj: T) {
+  return createReactive(obj, false, true)
+}
+
+/**
+ * 创建浅只读数据
+ * @param obj 对象
+ */
+function shallowReadonly<T extends object>(obj: T) {
+  return createReactive(obj, true, true)
 }
 
 /**
@@ -149,8 +205,9 @@ function track<T extends object>(target: T, key: string | symbol) {
  * @param target 响应式数据
  * @param key 属性
  * @param type 操作类型
+ * @param newVal 新值
  */
-function trigger<T extends object>(target: T, key: string | symbol, type: TriggerType) {
+function trigger<T extends object>(target: T, key: string | symbol, type: TriggerType, newVal?: any) {
   const depsMap = bucket.get(target)
   if (!depsMap) return
   const effects = depsMap.get(key)
@@ -171,6 +228,35 @@ function trigger<T extends object>(target: T, key: string | symbol, type: Trigge
           effectsToRun.add(effectFn)
         }
       })
+  }
+
+  // 当目标对象是数组时
+  if (Array.isArray(target)) {
+    // 当操作类型为 ADD 并且 key 是索引时，应该取出并执行那些与 length 属性相关联的副作用函数
+    if (type === TriggerType.ADD && isIndex(key)) {
+      // 取出与 length 相关联的副作用函数
+      const lengthEffects = depsMap.get('length')
+      // 将这些副作用函数添加到 effectsToRun 中，待执行
+      lengthEffects &&
+        lengthEffects.forEach((effectFn) => {
+          if (effectFn !== activeEffect) {
+            effectsToRun.add(effectFn)
+          }
+        })
+    }
+
+    // 修改数组的 length 属性时，应该取出并执行那些大于或等于新 length 值的索引属性相关联的副作用函数
+    if (key === 'length') {
+      depsMap.forEach((effects, key) => {
+        if (isIndex(key) && Number(key) >= newVal) {
+          effects.forEach((effectFn) => {
+            if (effectFn !== activeEffect) {
+              effectsToRun.add(effectFn)
+            }
+          })
+        }
+      })
+    }
   }
 
   effectsToRun.forEach((effectFn) => {
@@ -218,26 +304,31 @@ function cleanup(effectFn: EffectFnInterface) {
 
 // -------------------- 测试 --------------------
 // -------------------- 测试 1 --------------------
-// const obj = reactive({ foo: { bar: 1 } })
+// const arr = reactive(['foo'])
 
 // effect(() => {
-//   console.log(obj.foo.bar)
+//   console.log(arr[0])
 // })
 
-// // 修改 obj.foo.bar 的值，并不能触发响应
-// obj.foo.bar = 2
-
+// arr[0] = 'bar' // 能够触发响应
 // -------------------- 测试 2 --------------------
-const obj = shallowReactive({ foo: { bar: 1 } })
+// const arr = reactive(['foo']) // 数组的原长度为 1
+
+// effect(() => {
+//   console.log(arr.length) // 1
+// })
+
+// // 设置索引 1 的值，会导致数组的长度变为 2
+// arr[1] = 'bar' // 能够触发响应
+// -------------------- 测试 3 --------------------
+const arr = reactive(['foo'])
 
 effect(() => {
-  console.log(obj.foo.bar)
+  // 访问数组的第 0 个元素
+  console.log(arr[0])
 })
 
-// obj.foo 是响应的，可以触发副作用函数重新执行
-obj.foo = { bar: 2 }
-
-// obj.foo.bar 不是响应式的，不能触发副作用函数重新执行
-obj.foo.bar = 3
+// 将数组的长度修改为 0，会导致索引在 0 以及之后的元素都被删除，因此应该触发响应
+arr.length = 0
 
 export default {}

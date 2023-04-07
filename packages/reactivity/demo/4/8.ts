@@ -154,7 +154,7 @@ function computed<T>(getter: () => T): { readonly value: T } {
 }
 
 // -------------------- 测试 --------------------
-// -------------------- 测试1 --------------------
+// -------------------- 测试 1 --------------------
 // const sumRes = computed(() => {
 //   console.log('run')
 //   return obj.foo + obj.bar
@@ -164,7 +164,7 @@ function computed<T>(getter: () => T): { readonly value: T } {
 // console.log(sumRes.value)
 // console.log(sumRes.value)
 
-// -------------------- 测试2 --------------------
+// -------------------- 测试 2 --------------------
 const sumRes = computed(() => obj.foo + obj.bar)
 
 effect(() => {

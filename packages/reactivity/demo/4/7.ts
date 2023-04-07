@@ -107,7 +107,7 @@ function cleanup(effectFn: EffectFnInterface) {
 }
 
 // -------------------- 测试 --------------------
-// -------------------- 测试1 --------------------
+// -------------------- 测试 1 --------------------
 // effect(
 //   () => {
 //     console.log(obj.foo)
@@ -126,7 +126,7 @@ function cleanup(effectFn: EffectFnInterface) {
 
 // console.log('结束了')
 
-// -------------------- 测试2 --------------------
+// -------------------- 测试 2 --------------------
 // 定义一个任务队列
 const jobQueue = new Set<EffectFnInterface>()
 // 使用 Promise.resolve() 创建一个 promise 实例，我们用它将一个任务添加到微任务队列

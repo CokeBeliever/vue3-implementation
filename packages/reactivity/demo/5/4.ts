@@ -40,7 +40,7 @@ enum TriggerType {
  */
 enum ReactiveFlags {
   /** 访问原始数据 */
-  raw = '__v_raw',
+  RAW = '__v_raw',
 }
 
 const bucket = new WeakMap<object, Map<string | symbol, Set<EffectFnInterface>>>()
@@ -54,10 +54,10 @@ const ITERATE_KEY = Symbol()
  * @param isShallow 是否为浅响应/浅只读
  * @param isReadonly 是否只读
  */
-function createReactive<T extends object>(obj: T, isShallow = false, isReadonly = false) {
+function createReactive<T extends object>(obj: T, isShallow = false, isReadonly = false): T {
   return new Proxy(obj, {
     get(target, key, receiver) {
-      if (key === ReactiveFlags.raw) {
+      if (key === ReactiveFlags.RAW) {
         return target
       }
 
@@ -98,7 +98,7 @@ function createReactive<T extends object>(obj: T, isShallow = false, isReadonly 
       const type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
       const res = Reflect.set(target, key, newVal, receiver)
 
-      if (target === receiver[ReactiveFlags.raw]) {
+      if (target === receiver[ReactiveFlags.RAW]) {
         if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
           trigger(target, key, type)
         }
@@ -183,8 +183,8 @@ function trigger<T extends object>(target: T, key: string | symbol, type: Trigge
   if (!depsMap) return
   const effects = depsMap.get(key)
   const iterateEffects = depsMap.get(ITERATE_KEY)
-
   const effectsToRun = new Set<EffectFnInterface>()
+
   effects &&
     effects.forEach((effectFn) => {
       if (effectFn !== activeEffect) {
@@ -245,7 +245,7 @@ function cleanup(effectFn: EffectFnInterface) {
 }
 
 // -------------------- 测试 --------------------
-// -------------------- 测试1 --------------------
+// -------------------- 测试 1 --------------------
 const obj1 = readonly({ foo: { bar: 1 } })
 // 修改第一层数据，修改失败
 obj1.foo = { bar: 2 }

@@ -1,4 +1,4 @@
-// -------------------- 浅响应和深响应 --------------------
+// -------------------- 代理数组 - 隐式修改数组长度的原型方法 --------------------
 
 // -------------------- 类型代码 --------------------
 /**
@@ -47,30 +47,75 @@ const bucket = new WeakMap<object, Map<string | symbol, Set<EffectFnInterface>>>
 let activeEffect: EffectFnInterface | undefined
 const effectStack: EffectFnInterface[] = []
 const ITERATE_KEY = Symbol()
+const reactiveMap = new Map()
+/** 定义重写数组的原生方法 */
+const arrayInstrumentations = {}
+/** 一个标记变量，代表是否进行追踪。默认值为 true，即允许追踪 */
+let shouldTrack = true
+;['includes', 'indexOf', 'lastIndexOf'].forEach((method) => {
+  const originMethod = Array.prototype[method]
+  arrayInstrumentations[method] = function (...args) {
+    let res = originMethod.apply(this, args)
+
+    if (res === false || res < 0) {
+      res = originMethod.apply(this[ReactiveFlags.RAW], args)
+    }
+
+    return res
+  }
+})
+;['push', 'pop', 'shift', 'unshift', 'splice'].forEach((method) => {
+  const originMethod = Array.prototype[method]
+  arrayInstrumentations[method] = function (...args) {
+    // 在调用原生方法之前，禁止追踪
+    shouldTrack = false
+    const res = originMethod.apply(this, args)
+    // 在调用原生方法之后，恢复追踪
+    shouldTrack = true
+    return res
+  }
+})
+
+/**
+ * key 是否为索引
+ * @param key 属性键
+ */
+const isIndex = (key: string | symbol): boolean => {
+  if (typeof key === 'symbol') return false
+  const index = Number(key)
+  return Number.isInteger(index) && index >= 0
+}
 
 /**
  * 封装创建响应式数据逻辑
  * @param obj 对象
- * @param isShallow 是否为浅响应
+ * @param isShallow 是否为浅响应/浅只读
+ * @param isReadonly 是否只读
  */
-function createReactive<T extends object>(obj: T, isShallow = false): T {
-  return new Proxy(obj, {
+function createReactive<T extends object>(obj: T, isShallow = false, isReadonly = false): T {
+  const existionProxy = reactiveMap.get(obj)
+  if (existionProxy) return existionProxy
+
+  const proxy = new Proxy(obj, {
     get(target, key, receiver) {
       if (key === ReactiveFlags.RAW) {
         return target
       }
 
-      track(target, key)
+      if (!isReadonly) {
+        track(target, key)
+      }
 
-      // 得到非响应式的结果
+      if (Array.isArray(target) && arrayInstrumentations.hasOwnProperty(key)) {
+        return Reflect.get(arrayInstrumentations, key, receiver)
+      }
+
       const res = Reflect.get(target, key, receiver)
-      // 如果是浅响应，则直接返回结果
       if (isShallow) {
         return res
       } else {
         if (typeof res === 'object' && res !== null) {
-          // 调用 createReactive 将结果包装成响应式数据并返回
-          return createReactive(res)
+          return isReadonly && !isShallow ? createReactive(res, false, true) : createReactive(res)
         }
         return res
       }
@@ -87,13 +132,26 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
     },
 
     set(target, key, newVal, receiver) {
+      if (isReadonly) {
+        console.warn(`属性 ${key.toString()} 是只读的`)
+        return true
+      }
       const oldVal = target[key]
-      const type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
+      let type = TriggerType.SET
+
+      {
+        if (Array.isArray(target) && isIndex(key)) {
+          type = Number(key) < target.length ? TriggerType.SET : TriggerType.ADD
+        } else {
+          type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
+        }
+      }
+
       const res = Reflect.set(target, key, newVal, receiver)
 
       if (target === receiver[ReactiveFlags.RAW]) {
         if (oldVal !== newVal && (oldVal === oldVal || newVal === newVal)) {
-          trigger(target, key, type)
+          trigger(target, key, type, newVal, oldVal)
         }
       }
 
@@ -101,6 +159,10 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
     },
 
     deleteProperty(target, key) {
+      if (isReadonly) {
+        console.warn(`属性 ${key.toString()} 是只读的`)
+        return true
+      }
       const hadKey = Object.prototype.hasOwnProperty.call(target, key)
       const res = Reflect.deleteProperty(target, key)
 
@@ -111,6 +173,10 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
       return res
     },
   })
+
+  reactiveMap.set(obj, proxy)
+
+  return proxy
 }
 
 /**
@@ -130,12 +196,29 @@ function shallowReactive<T extends object>(obj: T) {
 }
 
 /**
+ * 创建深只读数据
+ * @param obj 对象
+ */
+function readonly<T extends object>(obj: T) {
+  return createReactive(obj, false, true)
+}
+
+/**
+ * 创建浅只读数据
+ * @param obj 对象
+ */
+function shallowReadonly<T extends object>(obj: T) {
+  return createReactive(obj, true, true)
+}
+
+/**
  * 在 get 拦截函数内调用，在响应式数据的指定属性上订阅副作用函数
  * @param target 响应式数据
  * @param key 属性
  */
 function track<T extends object>(target: T, key: string | symbol) {
-  if (!activeEffect) return
+  // 当禁止追踪时，直接返回
+  if (!activeEffect || !shouldTrack) return
   let depsMap = bucket.get(target)
   if (!depsMap) bucket.set(target, (depsMap = new Map()))
   let deps = depsMap.get(key)
@@ -149,8 +232,10 @@ function track<T extends object>(target: T, key: string | symbol) {
  * @param target 响应式数据
  * @param key 属性
  * @param type 操作类型
+ * @param newVal 新值
+ * @param oldVal 旧值
  */
-function trigger<T extends object>(target: T, key: string | symbol, type: TriggerType) {
+function trigger<T extends object>(target: T, key: string | symbol, type: TriggerType, newVal?: any, oldVal?: any) {
   const depsMap = bucket.get(target)
   if (!depsMap) return
   const effects = depsMap.get(key)
@@ -164,13 +249,41 @@ function trigger<T extends object>(target: T, key: string | symbol, type: Trigge
       }
     })
 
-  if (type === TriggerType.ADD || type === TriggerType.DELETE) {
+  if (
+    type === TriggerType.ADD ||
+    type === TriggerType.DELETE ||
+    (Array.isArray(target) && key === 'length' && newVal < oldVal)
+  ) {
     iterateEffects &&
       iterateEffects.forEach((effectFn) => {
         if (effectFn !== activeEffect) {
           effectsToRun.add(effectFn)
         }
       })
+  }
+
+  if (Array.isArray(target)) {
+    if (type === TriggerType.ADD && isIndex(key)) {
+      const lengthEffects = depsMap.get('length')
+      lengthEffects &&
+        lengthEffects.forEach((effectFn) => {
+          if (effectFn !== activeEffect) {
+            effectsToRun.add(effectFn)
+          }
+        })
+    }
+
+    if (key === 'length') {
+      depsMap.forEach((effects, key) => {
+        if (isIndex(key) && Number(key) >= newVal) {
+          effects.forEach((effectFn) => {
+            if (effectFn !== activeEffect) {
+              effectsToRun.add(effectFn)
+            }
+          })
+        }
+      })
+    }
   }
 
   effectsToRun.forEach((effectFn) => {
@@ -217,27 +330,16 @@ function cleanup(effectFn: EffectFnInterface) {
 }
 
 // -------------------- 测试 --------------------
-// -------------------- 测试 1 --------------------
-// const obj = reactive({ foo: { bar: 1 } })
+const arr: number[] = reactive([])
 
-// effect(() => {
-//   console.log(obj.foo.bar)
-// })
-
-// // 修改 obj.foo.bar 的值，并不能触发响应
-// obj.foo.bar = 2
-
-// -------------------- 测试 2 --------------------
-const obj = shallowReactive({ foo: { bar: 1 } })
-
+// 第一个副作用函数
 effect(() => {
-  console.log(obj.foo.bar)
+  arr.push(1)
 })
 
-// obj.foo 是响应的，可以触发副作用函数重新执行
-obj.foo = { bar: 2 }
-
-// obj.foo.bar 不是响应式的，不能触发副作用函数重新执行
-obj.foo.bar = 3
+// 第二个副作用函数
+effect(() => {
+  arr.push(2)
+})
 
 export default {}

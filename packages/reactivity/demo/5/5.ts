@@ -1,4 +1,4 @@
-// -------------------- 浅响应和深响应 --------------------
+// -------------------- 缓存代理对象 --------------------
 
 // -------------------- 类型代码 --------------------
 /**
@@ -47,30 +47,37 @@ const bucket = new WeakMap<object, Map<string | symbol, Set<EffectFnInterface>>>
 let activeEffect: EffectFnInterface | undefined
 const effectStack: EffectFnInterface[] = []
 const ITERATE_KEY = Symbol()
+/** 定义一个 Map 实例，存储原始对象到代理对象的映射 */
+const reactiveMap = new Map()
 
 /**
  * 封装创建响应式数据逻辑
  * @param obj 对象
- * @param isShallow 是否为浅响应
+ * @param isShallow 是否为浅响应/浅只读
+ * @param isReadonly 是否只读
  */
-function createReactive<T extends object>(obj: T, isShallow = false): T {
-  return new Proxy(obj, {
+function createReactive<T extends object>(obj: T, isShallow = false, isReadonly = false): T {
+  // 优先通过原始对象 obj 寻找之前创建的代理对象，如果找到了，直接返回已有的代理对象
+  const existionProxy = reactiveMap.get(obj)
+  if (existionProxy) return existionProxy
+
+  // 否则，创建新的代理对象
+  const proxy = new Proxy(obj, {
     get(target, key, receiver) {
       if (key === ReactiveFlags.RAW) {
         return target
       }
 
-      track(target, key)
+      if (!isReadonly) {
+        track(target, key)
+      }
 
-      // 得到非响应式的结果
       const res = Reflect.get(target, key, receiver)
-      // 如果是浅响应，则直接返回结果
       if (isShallow) {
         return res
       } else {
         if (typeof res === 'object' && res !== null) {
-          // 调用 createReactive 将结果包装成响应式数据并返回
-          return createReactive(res)
+          return isReadonly && !isShallow ? createReactive(res, false, true) : createReactive(res)
         }
         return res
       }
@@ -87,6 +94,10 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
     },
 
     set(target, key, newVal, receiver) {
+      if (isReadonly) {
+        console.warn(`属性 ${key.toString()} 是只读的`)
+        return true
+      }
       const oldVal = target[key]
       const type = Object.prototype.hasOwnProperty.call(target, key) ? TriggerType.SET : TriggerType.ADD
       const res = Reflect.set(target, key, newVal, receiver)
@@ -101,6 +112,10 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
     },
 
     deleteProperty(target, key) {
+      if (isReadonly) {
+        console.warn(`属性 ${key.toString()} 是只读的`)
+        return true
+      }
       const hadKey = Object.prototype.hasOwnProperty.call(target, key)
       const res = Reflect.deleteProperty(target, key)
 
@@ -111,6 +126,11 @@ function createReactive<T extends object>(obj: T, isShallow = false): T {
       return res
     },
   })
+
+  // 存储到 Map 中，避免重复创建代理对象
+  reactiveMap.set(obj, proxy)
+
+  return proxy
 }
 
 /**
@@ -127,6 +147,22 @@ function reactive<T extends object>(obj: T) {
  */
 function shallowReactive<T extends object>(obj: T) {
   return createReactive(obj, true)
+}
+
+/**
+ * 创建深只读数据
+ * @param obj 对象
+ */
+function readonly<T extends object>(obj: T) {
+  return createReactive(obj, false, true)
+}
+
+/**
+ * 创建浅只读数据
+ * @param obj 对象
+ */
+function shallowReadonly<T extends object>(obj: T) {
+  return createReactive(obj, true, true)
 }
 
 /**
@@ -217,27 +253,9 @@ function cleanup(effectFn: EffectFnInterface) {
 }
 
 // -------------------- 测试 --------------------
-// -------------------- 测试 1 --------------------
-// const obj = reactive({ foo: { bar: 1 } })
+const obj = reactive({ foo: { bar: 1 } })
 
-// effect(() => {
-//   console.log(obj.foo.bar)
-// })
-
-// // 修改 obj.foo.bar 的值，并不能触发响应
-// obj.foo.bar = 2
-
-// -------------------- 测试 2 --------------------
-const obj = shallowReactive({ foo: { bar: 1 } })
-
-effect(() => {
-  console.log(obj.foo.bar)
-})
-
-// obj.foo 是响应的，可以触发副作用函数重新执行
-obj.foo = { bar: 2 }
-
-// obj.foo.bar 不是响应式的，不能触发副作用函数重新执行
-obj.foo.bar = 3
+console.log(obj.foo.bar === obj.foo.bar) // 打印 true，符合预期
+console.log(obj.foo === obj.foo) // 打印 false，不符合预期
 
 export default {}
