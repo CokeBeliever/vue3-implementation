@@ -30,10 +30,11 @@ function effect() {
   document.body.innerText = obj.text
 }
 
-// -------------------- 测试 --------------------effect()
+// -------------------- 测试 --------------------
+effect()
 
 setTimeout(() => {
   obj.text = 'hello vue3'
 }, 1000)
 
-export default {}
+// export default {}
